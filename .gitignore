@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# AWS credentials and configuration
+.aws/
+credentials
+config
+
+# IDE / editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test / generated files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated reports
+reports/*
+!reports/.gitkeep
