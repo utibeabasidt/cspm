@@ -8,6 +8,7 @@ import boto3
 from scanner.engine import RuleEngine
 from rules.s3_encryption import S3EncryptionRule
 from rules.s3_public_access import S3PublicAccessRule
+from rules.s3_versioning import S3VersioningRule
 
 
 PROFILE = "CSPM-Administrator-831744285700"
@@ -43,6 +44,7 @@ def get_bucket_config(s3, bucket_name):
     config = {
         "public_access": {},
         "encryption_enabled": False,
+        "versioning_enabled": False,
     }
 
     # Get Block Public Access configuration
@@ -68,6 +70,15 @@ def get_bucket_config(s3, bucket_name):
 
     except s3.exceptions.ServerSideEncryptionConfigurationNotFoundError:
         pass
+
+    # Get bucket versioning configuration
+    response = s3.get_bucket_versioning(
+        Bucket=bucket_name
+    )
+
+    config["versioning_enabled"] = (
+        response.get("Status") == "Enabled"
+    )
 
     return config
 
@@ -106,6 +117,7 @@ def main():
     # Register S3 security rules
     engine.register(S3PublicAccessRule())
     engine.register(S3EncryptionRule())
+    engine.register(S3VersioningRule())
 
     buckets = discover_buckets(s3)
 
