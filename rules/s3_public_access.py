@@ -1,49 +1,62 @@
 from scanner.finding import Finding
+from scanner.rule import SecurityRule
 
 
-RULE_ID = "S3-001"
+class S3PublicAccessRule(SecurityRule):
 
+    @property
+    def rule_id(self):
+        return "S3-001"
 
-def evaluate(bucket_name, config):
-    """
-    Evaluate whether all S3 Block Public Access
-    settings are enabled.
-    """
+    @property
+    def name(self):
+        return "S3 Block Public Access"
 
-    checks = {
-        "BlockPublicAcls": config.get("BlockPublicAcls", False),
-        "IgnorePublicAcls": config.get("IgnorePublicAcls", False),
-        "BlockPublicPolicy": config.get("BlockPublicPolicy", False),
-        "RestrictPublicBuckets": config.get(
-            "RestrictPublicBuckets", False
-        ),
-    }
+    def evaluate(self, resource, config):
+        checks = {
+            "BlockPublicAcls": config.get(
+                "BlockPublicAcls",
+                False,
+            ),
+            "IgnorePublicAcls": config.get(
+                "IgnorePublicAcls",
+                False,
+            ),
+            "BlockPublicPolicy": config.get(
+                "BlockPublicPolicy",
+                False,
+            ),
+            "RestrictPublicBuckets": config.get(
+                "RestrictPublicBuckets",
+                False,
+            ),
+        }
 
-    if all(checks.values()):
+        if all(checks.values()):
+            return Finding(
+                rule_id=self.rule_id,
+                resource=resource,
+                resource_type="S3",
+                status="PASS",
+                severity="INFO",
+                description=(
+                    "S3 Block Public Access is fully enabled."
+                ),
+                recommendation=(
+                    "Keep all S3 Block Public Access settings enabled."
+                ),
+            )
+
         return Finding(
-            rule_id=RULE_ID,
-            resource=bucket_name,
+            rule_id=self.rule_id,
+            resource=resource,
             resource_type="S3",
-            status="PASS",
-            severity="INFO",
+            status="FAIL",
+            severity="HIGH",
             description=(
-                "S3 Block Public Access is fully enabled."
+                "S3 Block Public Access is not fully enabled."
             ),
             recommendation=(
-                "Keep all S3 Block Public Access settings enabled."
+                "Enable all S3 Block Public Access settings."
             ),
         )
-
-    return Finding(
-        rule_id=RULE_ID,
-        resource=bucket_name,
-        resource_type="S3",
-        status="FAIL",
-        severity="HIGH",
-        description=(
-            "S3 Block Public Access is not fully enabled."
-        ),
-        recommendation=(
-            "Enable all S3 Block Public Access settings."
-        ),
-    )

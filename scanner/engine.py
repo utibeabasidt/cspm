@@ -9,12 +9,12 @@ class RuleEngine:
     def register(self, rule):
         self.rules.append(rule)
 
-    def evaluate(self, bucket_name, config):
+    def evaluate(self, resource, config):
         findings = []
 
         for rule in self.rules:
             finding = rule.evaluate(
-                bucket_name,
+                resource,
                 config,
             )
 

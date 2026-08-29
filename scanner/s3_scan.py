@@ -6,7 +6,7 @@ from pathlib import Path
 import boto3
 
 from scanner.engine import RuleEngine
-from rules.s3_public_access import evaluate
+from rules.s3_public_access import S3PublicAccessRule
 
 
 PROFILE = "CSPM-Administrator-831744285700"
@@ -73,13 +73,7 @@ def main():
 
     engine = RuleEngine()
 
-    engine.register(
-        type(
-            "S3PublicAccessRule",
-            (),
-            {"evaluate": staticmethod(evaluate)},
-        )
-    )
+    engine.register(S3PublicAccessRule())
 
     buckets = discover_buckets(s3)
 
