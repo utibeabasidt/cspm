@@ -7,6 +7,7 @@ import boto3
 
 from scanner.engine import RuleEngine
 from rules.s3_encryption import S3EncryptionRule
+from rules.s3_logging import S3LoggingRule
 from rules.s3_public_access import S3PublicAccessRule
 from rules.s3_versioning import S3VersioningRule
 
@@ -45,6 +46,7 @@ def get_bucket_config(s3, bucket_name):
         "public_access": {},
         "encryption_enabled": False,
         "versioning_enabled": False,
+        "logging_enabled": False,
     }
 
     # Get Block Public Access configuration
@@ -78,6 +80,15 @@ def get_bucket_config(s3, bucket_name):
 
     config["versioning_enabled"] = (
         response.get("Status") == "Enabled"
+    )
+
+    # Get bucket logging configuration
+    response = s3.get_bucket_logging(
+        Bucket=bucket_name
+    )
+
+    config["logging_enabled"] = (
+        "LoggingEnabled" in response
     )
 
     return config
@@ -118,6 +129,7 @@ def main():
     engine.register(S3PublicAccessRule())
     engine.register(S3EncryptionRule())
     engine.register(S3VersioningRule())
+    engine.register(S3LoggingRule())
 
     buckets = discover_buckets(s3)
 
