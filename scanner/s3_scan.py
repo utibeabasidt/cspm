@@ -6,6 +6,7 @@ from pathlib import Path
 import boto3
 
 from scanner.engine import RuleEngine
+from rules.s3_encryption import S3EncryptionRule
 from rules.s3_public_access import S3PublicAccessRule
 
 
@@ -33,16 +34,42 @@ def discover_buckets(s3):
     ]
 
 
-def get_public_access_config(s3, bucket_name):
+def get_bucket_config(s3, bucket_name):
+    """
+    Collect the S3 security configuration required
+    by the registered S3 rules.
+    """
+
+    config = {
+        "public_access": {},
+        "encryption_enabled": False,
+    }
+
+    # Get Block Public Access configuration
     try:
         response = s3.get_public_access_block(
             Bucket=bucket_name
         )
 
-        return response["PublicAccessBlockConfiguration"]
+        config["public_access"] = response[
+            "PublicAccessBlockConfiguration"
+        ]
 
     except s3.exceptions.NoSuchPublicAccessBlockConfiguration:
-        return None
+        pass
+
+    # Get default encryption configuration
+    try:
+        s3.get_bucket_encryption(
+            Bucket=bucket_name
+        )
+
+        config["encryption_enabled"] = True
+
+    except s3.exceptions.ServerSideEncryptionConfigurationNotFoundError:
+        pass
+
+    return config
 
 
 def save_report(findings):
@@ -60,7 +87,10 @@ def save_report(findings):
         ],
     }
 
-    with REPORT_PATH.open("w", encoding="utf-8") as file:
+    with REPORT_PATH.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
         json.dump(
             report,
             file,
@@ -73,7 +103,9 @@ def main():
 
     engine = RuleEngine()
 
+    # Register S3 security rules
     engine.register(S3PublicAccessRule())
+    engine.register(S3EncryptionRule())
 
     buckets = discover_buckets(s3)
 
@@ -87,35 +119,15 @@ def main():
     findings = []
 
     for bucket in buckets:
-        config = get_public_access_config(
+        bucket_config = get_bucket_config(
             s3,
             bucket,
         )
 
-        if config is None:
-            from scanner.finding import Finding
-
-            finding = Finding(
-                rule_id="S3-001",
-                resource=bucket,
-                resource_type="S3",
-                status="FAIL",
-                severity="HIGH",
-                description=(
-                    "S3 Block Public Access configuration is missing."
-                ),
-                recommendation=(
-                    "Enable S3 Block Public Access."
-                ),
-            )
-
-            bucket_findings = [finding]
-
-        else:
-            bucket_findings = engine.evaluate(
-                bucket,
-                config,
-            )
+        bucket_findings = engine.evaluate(
+            bucket,
+            bucket_config,
+        )
 
         for finding in bucket_findings:
             findings.append(finding)

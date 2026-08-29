@@ -13,20 +13,25 @@ class S3PublicAccessRule(SecurityRule):
         return "S3 Block Public Access"
 
     def evaluate(self, resource, config):
+        public_access = config.get(
+            "public_access",
+            {},
+        )
+
         checks = {
-            "BlockPublicAcls": config.get(
+            "BlockPublicAcls": public_access.get(
                 "BlockPublicAcls",
                 False,
             ),
-            "IgnorePublicAcls": config.get(
+            "IgnorePublicAcls": public_access.get(
                 "IgnorePublicAcls",
                 False,
             ),
-            "BlockPublicPolicy": config.get(
+            "BlockPublicPolicy": public_access.get(
                 "BlockPublicPolicy",
                 False,
             ),
-            "RestrictPublicBuckets": config.get(
+            "RestrictPublicBuckets": public_access.get(
                 "RestrictPublicBuckets",
                 False,
             ),
