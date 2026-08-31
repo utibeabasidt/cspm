@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError
 
 from scanner.engine import RuleEngine
+from rules.s3_bucket_policy import S3BucketPolicyRule
 from rules.s3_encryption import S3EncryptionRule
 from rules.s3_logging import S3LoggingRule
 from rules.s3_public_access import S3PublicAccessRule
@@ -36,6 +38,39 @@ def discover_buckets(s3):
     ]
 
 
+def is_policy_public(policy_document):
+    """
+    Check whether an S3 bucket policy contains
+    an Allow statement with Principal set to '*'.
+    """
+
+    statements = policy_document.get(
+        "Statement",
+        [],
+    )
+
+    if isinstance(statements, dict):
+        statements = [statements]
+
+    for statement in statements:
+        effect = statement.get("Effect")
+        principal = statement.get("Principal")
+
+        if effect != "Allow":
+            continue
+
+        if principal == "*":
+            return True
+
+        if isinstance(principal, dict):
+            aws_principal = principal.get("AWS")
+
+            if aws_principal == "*":
+                return True
+
+    return False
+
+
 def get_bucket_config(s3, bucket_name):
     """
     Collect the S3 security configuration required
@@ -47,6 +82,7 @@ def get_bucket_config(s3, bucket_name):
         "encryption_enabled": False,
         "versioning_enabled": False,
         "logging_enabled": False,
+        "public_policy": False,
     }
 
     # Get Block Public Access configuration
@@ -91,6 +127,28 @@ def get_bucket_config(s3, bucket_name):
         "LoggingEnabled" in response
     )
 
+    # Get bucket policy and check for public access
+    try:
+        response = s3.get_bucket_policy(
+            Bucket=bucket_name
+        )
+
+        policy_document = json.loads(
+            response["Policy"]
+        )
+
+        config["public_policy"] = is_policy_public(
+            policy_document
+        )
+
+    except ClientError as error:
+        error_code = error.response[
+            "Error"
+        ]["Code"]
+
+        if error_code != "NoSuchBucketPolicy":
+            raise
+
     return config
 
 
@@ -101,7 +159,9 @@ def save_report(findings):
     )
 
     report = {
-        "scan_time": datetime.now(timezone.utc).isoformat(),
+        "scan_time": datetime.now(
+            timezone.utc
+        ).isoformat(),
         "resource_type": "S3",
         "findings": [
             asdict(finding)
@@ -130,6 +190,7 @@ def main():
     engine.register(S3EncryptionRule())
     engine.register(S3VersioningRule())
     engine.register(S3LoggingRule())
+    engine.register(S3BucketPolicyRule())
 
     buckets = discover_buckets(s3)
 
@@ -160,7 +221,9 @@ def main():
             print(f"Rule:     {finding.rule_id}")
             print(f"Status:   {finding.status}")
             print(f"Severity: {finding.severity}")
-            print(f"Finding:  {finding.description}")
+            print(
+                f"Finding:  {finding.description}"
+            )
 
     passed = sum(
         1
