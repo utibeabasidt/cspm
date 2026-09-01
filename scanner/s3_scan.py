@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,7 +86,7 @@ def get_bucket_config(s3, bucket_name):
         "public_policy": False,
     }
 
-    # Get Block Public Access configuration
+    # S3 Block Public Access
     try:
         response = s3.get_public_access_block(
             Bucket=bucket_name
@@ -98,7 +99,7 @@ def get_bucket_config(s3, bucket_name):
     except s3.exceptions.NoSuchPublicAccessBlockConfiguration:
         pass
 
-    # Get default encryption configuration
+    # S3 Default Encryption
     try:
         s3.get_bucket_encryption(
             Bucket=bucket_name
@@ -109,7 +110,7 @@ def get_bucket_config(s3, bucket_name):
     except s3.exceptions.ServerSideEncryptionConfigurationNotFoundError:
         pass
 
-    # Get bucket versioning configuration
+    # S3 Versioning
     response = s3.get_bucket_versioning(
         Bucket=bucket_name
     )
@@ -118,7 +119,7 @@ def get_bucket_config(s3, bucket_name):
         response.get("Status") == "Enabled"
     )
 
-    # Get bucket logging configuration
+    # S3 Server Access Logging
     response = s3.get_bucket_logging(
         Bucket=bucket_name
     )
@@ -127,7 +128,7 @@ def get_bucket_config(s3, bucket_name):
         "LoggingEnabled" in response
     )
 
-    # Get bucket policy and check for public access
+    # S3 Bucket Policy
     try:
         response = s3.get_bucket_policy(
             Bucket=bucket_name
@@ -142,9 +143,7 @@ def get_bucket_config(s3, bucket_name):
         )
 
     except ClientError as error:
-        error_code = error.response[
-            "Error"
-        ]["Code"]
+        error_code = error.response["Error"]["Code"]
 
         if error_code != "NoSuchBucketPolicy":
             raise
@@ -153,9 +152,23 @@ def get_bucket_config(s3, bucket_name):
 
 
 def save_report(findings):
+    """
+    Save scan findings as a JSON report.
+    """
+
     REPORT_PATH.parent.mkdir(
         parents=True,
         exist_ok=True,
+    )
+
+    severity_counts = Counter(
+        finding.severity
+        for finding in findings
+    )
+
+    status_counts = Counter(
+        finding.status
+        for finding in findings
     )
 
     report = {
@@ -163,6 +176,17 @@ def save_report(findings):
             timezone.utc
         ).isoformat(),
         "resource_type": "S3",
+        "summary": {
+            "findings": len(findings),
+            "passed": status_counts.get("PASS", 0),
+            "failed": status_counts.get("FAIL", 0),
+            "severity": {
+                "HIGH": severity_counts.get("HIGH", 0),
+                "MEDIUM": severity_counts.get("MEDIUM", 0),
+                "LOW": severity_counts.get("LOW", 0),
+                "INFO": severity_counts.get("INFO", 0),
+            },
+        },
         "findings": [
             asdict(finding)
             for finding in findings
@@ -178,6 +202,56 @@ def save_report(findings):
             file,
             indent=4,
         )
+
+
+def print_summary(findings, bucket_count):
+    """
+    Print scan and severity summaries.
+    """
+
+    status_counts = Counter(
+        finding.status
+        for finding in findings
+    )
+
+    severity_counts = Counter(
+        finding.severity
+        for finding in findings
+    )
+
+    print("\nSUMMARY")
+    print("-------")
+    print(f"Buckets scanned: {bucket_count}")
+    print(f"Findings:        {len(findings)}")
+    print(
+        f"Passed:          "
+        f"{status_counts.get('PASS', 0)}"
+    )
+    print(
+        f"Failed:          "
+        f"{status_counts.get('FAIL', 0)}"
+    )
+
+    print("\nSEVERITY SUMMARY")
+    print("----------------")
+    print(
+        f"HIGH:            "
+        f"{severity_counts.get('HIGH', 0)}"
+    )
+    print(
+        f"MEDIUM:          "
+        f"{severity_counts.get('MEDIUM', 0)}"
+    )
+    print(
+        f"LOW:             "
+        f"{severity_counts.get('LOW', 0)}"
+    )
+    print(
+        f"INFO:            "
+        f"{severity_counts.get('INFO', 0)}"
+    )
+
+    print(f"\nReport:          {REPORT_PATH}")
 
 
 def main():
@@ -214,38 +288,21 @@ def main():
             bucket_config,
         )
 
-        for finding in bucket_findings:
-            findings.append(finding)
+        findings.extend(bucket_findings)
 
+        for finding in bucket_findings:
             print(f"\nResource: {finding.resource}")
             print(f"Rule:     {finding.rule_id}")
             print(f"Status:   {finding.status}")
             print(f"Severity: {finding.severity}")
-            print(
-                f"Finding:  {finding.description}"
-            )
-
-    passed = sum(
-        1
-        for finding in findings
-        if finding.status == "PASS"
-    )
-
-    failed = sum(
-        1
-        for finding in findings
-        if finding.status == "FAIL"
-    )
+            print(f"Finding:  {finding.description}")
 
     save_report(findings)
 
-    print("\nSUMMARY")
-    print("-------")
-    print(f"Buckets scanned: {len(buckets)}")
-    print(f"Findings:        {len(findings)}")
-    print(f"Passed:          {passed}")
-    print(f"Failed:          {failed}")
-    print(f"Report:          {REPORT_PATH}")
+    print_summary(
+        findings,
+        len(buckets),
+    )
 
 
 if __name__ == "__main__":
