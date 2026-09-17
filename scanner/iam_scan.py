@@ -1,14 +1,21 @@
 import json
+from collections import Counter
+from dataclasses import asdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
 
+from scanner.finding import Finding
+
 
 PROFILE = "CSPM-Administrator-831744285700"
 REGION = "us-east-1"
-ACCESS_KEY_MAX_AGE_DAYS = 90
 
+REPORT_PATH = Path("reports/iam_scan.json")
+
+ACCESS_KEY_MAX_AGE_DAYS = 90
 MIN_PASSWORD_LENGTH = 14
 
 
@@ -30,33 +37,48 @@ def get_account_summary(iam):
 def check_root_mfa(iam):
     summary = get_account_summary(iam)
 
-    root_mfa_enabled = summary.get("AccountMFAEnabled", 0)
+    root_mfa_enabled = summary.get(
+        "AccountMFAEnabled",
+        0,
+    )
 
     if root_mfa_enabled == 1:
-        return {
-            "rule_id": "IAM-001",
-            "title": "Root Account MFA",
-            "status": "PASS",
-            "severity": "INFO",
-            "message": "Root account MFA is enabled.",
-        }
+        return Finding(
+            rule_id="IAM-001",
+            resource="AWS Account",
+            resource_type="IAM",
+            status="PASS",
+            severity="INFO",
+            description="Root account MFA is enabled.",
+            recommendation=(
+                "Keep root account MFA enabled."
+            ),
+        )
 
-    return {
-        "rule_id": "IAM-001",
-        "title": "Root Account MFA",
-        "status": "FAIL",
-        "severity": "HIGH",
-        "message": "Root account MFA is not enabled.",
-    }
+    return Finding(
+        rule_id="IAM-001",
+        resource="AWS Account",
+        resource_type="IAM",
+        status="FAIL",
+        severity="HIGH",
+        description="Root account MFA is not enabled.",
+        recommendation=(
+            "Enable MFA on the AWS root account."
+        ),
+    )
 
 
 def discover_users(iam):
     users = []
 
-    paginator = iam.get_paginator("list_users")
+    paginator = iam.get_paginator(
+        "list_users"
+    )
 
     for page in paginator.paginate():
-        users.extend(page.get("Users", []))
+        users.extend(
+            page.get("Users", [])
+        )
 
     return users
 
@@ -66,7 +88,10 @@ def get_user_access_keys(iam, user_name):
         UserName=user_name
     )
 
-    return response.get("AccessKeyMetadata", [])
+    return response.get(
+        "AccessKeyMetadata",
+        []
+    )
 
 
 def check_access_key_age(iam):
@@ -77,45 +102,70 @@ def check_access_key_age(iam):
 
     for user in users:
         user_name = user["UserName"]
-        access_keys = get_user_access_keys(iam, user_name)
+
+        access_keys = get_user_access_keys(
+            iam,
+            user_name,
+        )
 
         for access_key in access_keys:
-            access_key_id = access_key["AccessKeyId"]
-            status = access_key["Status"]
-            created_at = access_key["CreateDate"]
+            access_key_id = access_key[
+                "AccessKeyId"
+            ]
 
-            age_days = (now - created_at).days
+            status = access_key[
+                "Status"
+            ]
+
+            created_at = access_key[
+                "CreateDate"
+            ]
+
+            age_days = (
+                now - created_at
+            ).days
 
             if (
                 status == "Active"
                 and age_days > ACCESS_KEY_MAX_AGE_DAYS
             ):
                 findings.append(
-                    {
-                        "rule_id": "IAM-002",
-                        "title": "Old Active Access Key",
-                        "status": "FAIL",
-                        "severity": "HIGH",
-                        "message": (
-                            f"User '{user_name}' has active access key "
-                            f"'{access_key_id}' that is "
-                            f"{age_days} days old."
+                    Finding(
+                        rule_id="IAM-002",
+                        resource=user_name,
+                        resource_type="IAM User",
+                        status="FAIL",
+                        severity="HIGH",
+                        description=(
+                            f"User '{user_name}' has active "
+                            f"access key '{access_key_id}' "
+                            f"that is {age_days} days old."
                         ),
-                    }
+                        recommendation=(
+                            "Rotate or deactivate old IAM "
+                            "access keys and use temporary "
+                            "credentials where possible."
+                        ),
+                    )
                 )
 
     if not findings:
         findings.append(
-            {
-                "rule_id": "IAM-002",
-                "title": "Old Active Access Key",
-                "status": "PASS",
-                "severity": "INFO",
-                "message": (
+            Finding(
+                rule_id="IAM-002",
+                resource="IAM Users",
+                resource_type="IAM",
+                status="PASS",
+                severity="INFO",
+                description=(
                     "No active IAM access keys older than "
                     f"{ACCESS_KEY_MAX_AGE_DAYS} days were found."
                 ),
-            }
+                recommendation=(
+                    "Continue rotating IAM access keys "
+                    "regularly."
+                ),
+            )
         )
 
     return findings
@@ -124,10 +174,14 @@ def check_access_key_age(iam):
 def discover_roles(iam):
     roles = []
 
-    paginator = iam.get_paginator("list_roles")
+    paginator = iam.get_paginator(
+        "list_roles"
+    )
 
     for page in paginator.paginate():
-        roles.extend(page.get("Roles", []))
+        roles.extend(
+            page.get("Roles", [])
+        )
 
     return roles
 
@@ -137,10 +191,19 @@ def get_role_trust_policy(iam, role_name):
         RoleName=role_name
     )
 
-    encoded_policy = response["Role"]["AssumeRolePolicyDocument"]
+    encoded_policy = response[
+        "Role"
+    ][
+        "AssumeRolePolicyDocument"
+    ]
 
-    if isinstance(encoded_policy, str):
-        return json.loads(encoded_policy)
+    if isinstance(
+        encoded_policy,
+        str,
+    ):
+        return json.loads(
+            encoded_policy
+        )
 
     return encoded_policy
 
@@ -149,30 +212,49 @@ def principal_contains_wildcard(principal):
     if principal == "*":
         return True
 
-    if isinstance(principal, dict):
+    if isinstance(
+        principal,
+        dict,
+    ):
         for value in principal.values():
             if value == "*":
                 return True
 
-            if isinstance(value, list) and "*" in value:
+            if (
+                isinstance(value, list)
+                and "*" in value
+            ):
                 return True
 
-    if isinstance(principal, list):
+    if isinstance(
+        principal,
+        list,
+    ):
         return "*" in principal
 
     return False
 
 
 def trust_policy_allows_wildcard(policy):
-    statements = policy.get("Statement", [])
+    statements = policy.get(
+        "Statement",
+        [],
+    )
 
-    if isinstance(statements, dict):
+    if isinstance(
+        statements,
+        dict,
+    ):
         statements = [statements]
 
     for statement in statements:
-        principal = statement.get("Principal")
+        principal = statement.get(
+            "Principal"
+        )
 
-        if principal_contains_wildcard(principal):
+        if principal_contains_wildcard(
+            principal
+        ):
             return True
 
     return False
@@ -190,69 +272,114 @@ def check_role_trust_policies(iam):
             role_name,
         )
 
-        if trust_policy_allows_wildcard(policy):
+        if trust_policy_allows_wildcard(
+            policy
+        ):
             findings.append(
-                {
-                    "rule_id": "IAM-003",
-                    "title": "Wildcard Role Trust Policy",
-                    "status": "FAIL",
-                    "severity": "HIGH",
-                    "message": (
-                        f"Role '{role_name}' has a trust policy "
-                        "containing a wildcard principal."
+                Finding(
+                    rule_id="IAM-003",
+                    resource=role_name,
+                    resource_type="IAM Role",
+                    status="FAIL",
+                    severity="HIGH",
+                    description=(
+                        f"Role '{role_name}' has a trust "
+                        "policy containing a wildcard "
+                        "principal."
                     ),
-                }
+                    recommendation=(
+                        "Restrict the role trust policy "
+                        "to explicitly authorized AWS "
+                        "principals."
+                    ),
+                )
             )
 
     if not findings:
         findings.append(
-            {
-                "rule_id": "IAM-003",
-                "title": "Wildcard Role Trust Policy",
-                "status": "PASS",
-                "severity": "INFO",
-                "message": (
+            Finding(
+                rule_id="IAM-003",
+                resource="IAM Roles",
+                resource_type="IAM",
+                status="PASS",
+                severity="INFO",
+                description=(
                     "No IAM roles with wildcard trust-policy "
                     "principals were found."
                 ),
-            }
+                recommendation=(
+                    "Keep IAM role trust policies restricted "
+                    "to authorized principals."
+                ),
+            )
         )
 
     return findings
 
 
-def policy_document_has_full_admin_access(policy_document):
-    statements = policy_document.get("Statement", [])
+def policy_document_has_full_admin_access(
+    policy_document
+):
+    statements = policy_document.get(
+        "Statement",
+        [],
+    )
 
-    if isinstance(statements, dict):
+    if isinstance(
+        statements,
+        dict,
+    ):
         statements = [statements]
 
     for statement in statements:
-        if statement.get("Effect") != "Allow":
+        if statement.get(
+            "Effect"
+        ) != "Allow":
             continue
 
-        action = statement.get("Action")
-        resource = statement.get("Resource")
+        action = statement.get(
+            "Action"
+        )
+
+        resource = statement.get(
+            "Resource"
+        )
 
         action_is_wildcard = (
             action == "*"
-            or isinstance(action, list)
-            and "*" in action
+            or (
+                isinstance(
+                    action,
+                    list,
+                )
+                and "*" in action
+            )
         )
 
         resource_is_wildcard = (
             resource == "*"
-            or isinstance(resource, list)
-            and "*" in resource
+            or (
+                isinstance(
+                    resource,
+                    list,
+                )
+                and "*" in resource
+            )
         )
 
-        if action_is_wildcard and resource_is_wildcard:
+        if (
+            action_is_wildcard
+            and resource_is_wildcard
+        ):
             return True
 
     return False
 
 
-def get_attached_role_policies(iam, role_name):
+def get_attached_role_policies(
+    iam,
+    role_name,
+):
     policies = []
 
     paginator = iam.get_paginator(
@@ -263,20 +390,28 @@ def get_attached_role_policies(iam, role_name):
         RoleName=role_name
     ):
         policies.extend(
-            page.get("AttachedPolicies", [])
+            page.get(
+                "AttachedPolicies",
+                [],
+            )
         )
 
     return policies
 
 
-def get_policy_document(iam, policy_arn):
+def get_policy_document(
+    iam,
+    policy_arn,
+):
     response = iam.get_policy(
         PolicyArn=policy_arn
     )
 
-    default_version_id = (
-        response["Policy"]["DefaultVersionId"]
-    )
+    default_version_id = response[
+        "Policy"
+    ][
+        "DefaultVersionId"
+    ]
 
     version_response = iam.get_policy_version(
         PolicyArn=policy_arn,
@@ -285,10 +420,17 @@ def get_policy_document(iam, policy_arn):
 
     document = version_response[
         "PolicyVersion"
-    ]["Document"]
+    ][
+        "Document"
+    ]
 
-    if isinstance(document, str):
-        return json.loads(document)
+    if isinstance(
+        document,
+        str,
+    ):
+        return json.loads(
+            document
+        )
 
     return document
 
@@ -306,8 +448,13 @@ def check_role_admin_policies(iam):
         )
 
         for policy in policies:
-            policy_name = policy["PolicyName"]
-            policy_arn = policy["PolicyArn"]
+            policy_name = policy[
+                "PolicyName"
+            ]
+
+            policy_arn = policy[
+                "PolicyArn"
+            ]
 
             document = get_policy_document(
                 iam,
@@ -318,31 +465,42 @@ def check_role_admin_policies(iam):
                 document
             ):
                 findings.append(
-                    {
-                        "rule_id": "IAM-004",
-                        "title": "Administrator Policy",
-                        "status": "FAIL",
-                        "severity": "HIGH",
-                        "message": (
-                            f"Role '{role_name}' has attached policy "
-                            f"'{policy_name}' granting "
+                    Finding(
+                        rule_id="IAM-004",
+                        resource=role_name,
+                        resource_type="IAM Role",
+                        status="FAIL",
+                        severity="HIGH",
+                        description=(
+                            f"Role '{role_name}' has attached "
+                            f"policy '{policy_name}' granting "
                             "Action '*' on Resource '*'."
                         ),
-                    }
+                        recommendation=(
+                            "Apply least-privilege permissions "
+                            "and avoid granting full administrative "
+                            "access unless explicitly required."
+                        ),
+                    )
                 )
 
     if not findings:
         findings.append(
-            {
-                "rule_id": "IAM-004",
-                "title": "Administrator Policy",
-                "status": "PASS",
-                "severity": "INFO",
-                "message": (
+            Finding(
+                rule_id="IAM-004",
+                resource="IAM Roles",
+                resource_type="IAM",
+                status="PASS",
+                severity="INFO",
+                description=(
                     "No attached IAM role policies granting "
                     "full administrative access were found."
                 ),
-            }
+                recommendation=(
+                    "Continue following least-privilege "
+                    "principles for IAM permissions."
+                ),
+            )
         )
 
     return findings
@@ -351,21 +509,36 @@ def check_role_admin_policies(iam):
 def check_password_policy(iam):
     try:
         response = iam.get_account_password_policy()
-        policy = response.get("PasswordPolicy", {})
+
+        policy = response.get(
+            "PasswordPolicy",
+            {}
+        )
 
     except ClientError as error:
-        error_code = error.response.get("Error", {}).get("Code")
+        error_code = error.response.get(
+            "Error",
+            {}
+        ).get(
+            "Code"
+        )
 
         if error_code == "NoSuchEntity":
-            return {
-                "rule_id": "IAM-005",
-                "title": "IAM Password Policy",
-                "status": "FAIL",
-                "severity": "MEDIUM",
-                "message": (
-                    "No IAM account password policy is configured."
+            return Finding(
+                rule_id="IAM-005",
+                resource="AWS Account",
+                resource_type="IAM",
+                status="FAIL",
+                severity="MEDIUM",
+                description=(
+                    "No IAM account password policy "
+                    "is configured."
                 ),
-            }
+                recommendation=(
+                    "Configure an IAM account password "
+                    "policy with strong password requirements."
+                ),
+            )
 
         raise
 
@@ -430,41 +603,132 @@ def check_password_policy(iam):
         )
 
     if issues:
-        return {
-            "rule_id": "IAM-005",
-            "title": "IAM Password Policy",
-            "status": "FAIL",
-            "severity": "MEDIUM",
-            "message": (
-                "IAM password policy does not meet the configured "
-                "security requirements: "
+        return Finding(
+            rule_id="IAM-005",
+            resource="AWS Account",
+            resource_type="IAM",
+            status="FAIL",
+            severity="MEDIUM",
+            description=(
+                "IAM password policy does not meet the "
+                "configured security requirements: "
                 + "; ".join(issues)
                 + "."
             ),
-        }
+            recommendation=(
+                "Configure the IAM account password policy "
+                "to meet the required security settings."
+            ),
+        )
 
-    return {
-        "rule_id": "IAM-005",
-        "title": "IAM Password Policy",
-        "status": "PASS",
-        "severity": "INFO",
-        "message": (
-            "IAM account password policy meets the configured "
-            "security requirements."
+    return Finding(
+        rule_id="IAM-005",
+        resource="AWS Account",
+        resource_type="IAM",
+        status="PASS",
+        severity="INFO",
+        description=(
+            "IAM account password policy meets the "
+            "configured security requirements."
         ),
-    }
+        recommendation=(
+            "Keep the IAM account password policy "
+            "configured with strong security requirements."
+        ),
+    )
 
 
 def scan_iam(iam):
     findings = []
 
-    findings.append(check_root_mfa(iam))
-    findings.extend(check_access_key_age(iam))
-    findings.extend(check_role_trust_policies(iam))
-    findings.extend(check_role_admin_policies(iam))
-    findings.append(check_password_policy(iam))
+    findings.append(
+        check_root_mfa(iam)
+    )
+
+    findings.extend(
+        check_access_key_age(iam)
+    )
+
+    findings.extend(
+        check_role_trust_policies(iam)
+    )
+
+    findings.extend(
+        check_role_admin_policies(iam)
+    )
+
+    findings.append(
+        check_password_policy(iam)
+    )
 
     return findings
+
+
+def save_report(findings):
+    REPORT_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    severity_counts = Counter(
+        finding.severity
+        for finding in findings
+    )
+
+    status_counts = Counter(
+        finding.status
+        for finding in findings
+    )
+
+    report = {
+        "scan_time": datetime.now(
+            timezone.utc
+        ).isoformat(),
+        "resource_type": "IAM",
+        "summary": {
+            "findings": len(findings),
+            "passed": status_counts.get(
+                "PASS",
+                0,
+            ),
+            "failed": status_counts.get(
+                "FAIL",
+                0,
+            ),
+            "severity": {
+                "HIGH": severity_counts.get(
+                    "HIGH",
+                    0,
+                ),
+                "MEDIUM": severity_counts.get(
+                    "MEDIUM",
+                    0,
+                ),
+                "LOW": severity_counts.get(
+                    "LOW",
+                    0,
+                ),
+                "INFO": severity_counts.get(
+                    "INFO",
+                    0,
+                ),
+            },
+        },
+        "findings": [
+            asdict(finding)
+            for finding in findings
+        ],
+    }
+
+    with REPORT_PATH.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            report,
+            file,
+            indent=4,
+        )
 
 
 def print_findings(findings):
@@ -473,23 +737,27 @@ def print_findings(findings):
 
     for finding in findings:
         print(
-            f"{finding['rule_id']} | "
-            f"{finding['status']} | "
-            f"{finding['severity']} | "
-            f"{finding['title']} | "
-            f"{finding['message']}"
+            f"{finding.rule_id} | "
+            f"{finding.status} | "
+            f"{finding.severity} | "
+            f"{finding.description}"
         )
 
     passed = sum(
         1
         for finding in findings
-        if finding["status"] == "PASS"
+        if finding.status == "PASS"
     )
 
     failed = sum(
         1
         for finding in findings
-        if finding["status"] == "FAIL"
+        if finding.status == "FAIL"
+    )
+
+    severity_counts = Counter(
+        finding.severity
+        for finding in findings
     )
 
     print("\nIAM SCAN SUMMARY")
@@ -498,11 +766,36 @@ def print_findings(findings):
     print(f"Passed:   {passed}")
     print(f"Failed:   {failed}")
 
+    print("\nSEVERITY SUMMARY")
+    print("----------------")
+    print(
+        f"HIGH:   "
+        f"{severity_counts.get('HIGH', 0)}"
+    )
+    print(
+        f"MEDIUM: "
+        f"{severity_counts.get('MEDIUM', 0)}"
+    )
+    print(
+        f"LOW:    "
+        f"{severity_counts.get('LOW', 0)}"
+    )
+    print(
+        f"INFO:   "
+        f"{severity_counts.get('INFO', 0)}"
+    )
+
+    print(
+        f"\nReport: {REPORT_PATH}"
+    )
+
 
 def main():
     iam = get_iam_client()
 
     findings = scan_iam(iam)
+
+    save_report(findings)
 
     print_findings(findings)
 
