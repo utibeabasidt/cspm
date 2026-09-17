@@ -2,11 +2,14 @@ import json
 from datetime import datetime, timezone
 
 import boto3
+from botocore.exceptions import ClientError
 
 
 PROFILE = "CSPM-Administrator-831744285700"
 REGION = "us-east-1"
 ACCESS_KEY_MAX_AGE_DAYS = 90
+
+MIN_PASSWORD_LENGTH = 14
 
 
 def get_iam_client():
@@ -345,6 +348,113 @@ def check_role_admin_policies(iam):
     return findings
 
 
+def check_password_policy(iam):
+    try:
+        response = iam.get_account_password_policy()
+        policy = response.get("PasswordPolicy", {})
+
+    except ClientError as error:
+        error_code = error.response.get("Error", {}).get("Code")
+
+        if error_code == "NoSuchEntity":
+            return {
+                "rule_id": "IAM-005",
+                "title": "IAM Password Policy",
+                "status": "FAIL",
+                "severity": "MEDIUM",
+                "message": (
+                    "No IAM account password policy is configured."
+                ),
+            }
+
+        raise
+
+    issues = []
+
+    minimum_length = policy.get(
+        "MinimumPasswordLength",
+        0,
+    )
+
+    if minimum_length < MIN_PASSWORD_LENGTH:
+        issues.append(
+            f"minimum password length is {minimum_length}"
+        )
+
+    if not policy.get(
+        "RequireUppercaseCharacters",
+        False,
+    ):
+        issues.append(
+            "uppercase characters are not required"
+        )
+
+    if not policy.get(
+        "RequireLowercaseCharacters",
+        False,
+    ):
+        issues.append(
+            "lowercase characters are not required"
+        )
+
+    if not policy.get(
+        "RequireNumbers",
+        False,
+    ):
+        issues.append(
+            "numbers are not required"
+        )
+
+    if not policy.get(
+        "RequireSymbols",
+        False,
+    ):
+        issues.append(
+            "symbols are not required"
+        )
+
+    if not policy.get(
+        "PasswordReusePreventionEnabled",
+        False,
+    ):
+        issues.append(
+            "password reuse prevention is not enabled"
+        )
+
+    if not policy.get(
+        "ExpirePasswords",
+        False,
+    ):
+        issues.append(
+            "password expiration is not enabled"
+        )
+
+    if issues:
+        return {
+            "rule_id": "IAM-005",
+            "title": "IAM Password Policy",
+            "status": "FAIL",
+            "severity": "MEDIUM",
+            "message": (
+                "IAM password policy does not meet the configured "
+                "security requirements: "
+                + "; ".join(issues)
+                + "."
+            ),
+        }
+
+    return {
+        "rule_id": "IAM-005",
+        "title": "IAM Password Policy",
+        "status": "PASS",
+        "severity": "INFO",
+        "message": (
+            "IAM account password policy meets the configured "
+            "security requirements."
+        ),
+    }
+
+
 def scan_iam(iam):
     findings = []
 
@@ -352,6 +462,7 @@ def scan_iam(iam):
     findings.extend(check_access_key_age(iam))
     findings.extend(check_role_trust_policies(iam))
     findings.extend(check_role_admin_policies(iam))
+    findings.append(check_password_policy(iam))
 
     return findings
 
