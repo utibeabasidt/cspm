@@ -218,12 +218,140 @@ def check_role_trust_policies(iam):
     return findings
 
 
+def policy_document_has_full_admin_access(policy_document):
+    statements = policy_document.get("Statement", [])
+
+    if isinstance(statements, dict):
+        statements = [statements]
+
+    for statement in statements:
+        if statement.get("Effect") != "Allow":
+            continue
+
+        action = statement.get("Action")
+        resource = statement.get("Resource")
+
+        action_is_wildcard = (
+            action == "*"
+            or isinstance(action, list)
+            and "*" in action
+        )
+
+        resource_is_wildcard = (
+            resource == "*"
+            or isinstance(resource, list)
+            and "*" in resource
+        )
+
+        if action_is_wildcard and resource_is_wildcard:
+            return True
+
+    return False
+
+
+def get_attached_role_policies(iam, role_name):
+    policies = []
+
+    paginator = iam.get_paginator(
+        "list_attached_role_policies"
+    )
+
+    for page in paginator.paginate(
+        RoleName=role_name
+    ):
+        policies.extend(
+            page.get("AttachedPolicies", [])
+        )
+
+    return policies
+
+
+def get_policy_document(iam, policy_arn):
+    response = iam.get_policy(
+        PolicyArn=policy_arn
+    )
+
+    default_version_id = (
+        response["Policy"]["DefaultVersionId"]
+    )
+
+    version_response = iam.get_policy_version(
+        PolicyArn=policy_arn,
+        VersionId=default_version_id,
+    )
+
+    document = version_response[
+        "PolicyVersion"
+    ]["Document"]
+
+    if isinstance(document, str):
+        return json.loads(document)
+
+    return document
+
+
+def check_role_admin_policies(iam):
+    roles = discover_roles(iam)
+    findings = []
+
+    for role in roles:
+        role_name = role["RoleName"]
+
+        policies = get_attached_role_policies(
+            iam,
+            role_name,
+        )
+
+        for policy in policies:
+            policy_name = policy["PolicyName"]
+            policy_arn = policy["PolicyArn"]
+
+            document = get_policy_document(
+                iam,
+                policy_arn,
+            )
+
+            if policy_document_has_full_admin_access(
+                document
+            ):
+                findings.append(
+                    {
+                        "rule_id": "IAM-004",
+                        "title": "Administrator Policy",
+                        "status": "FAIL",
+                        "severity": "HIGH",
+                        "message": (
+                            f"Role '{role_name}' has attached policy "
+                            f"'{policy_name}' granting "
+                            "Action '*' on Resource '*'."
+                        ),
+                    }
+                )
+
+    if not findings:
+        findings.append(
+            {
+                "rule_id": "IAM-004",
+                "title": "Administrator Policy",
+                "status": "PASS",
+                "severity": "INFO",
+                "message": (
+                    "No attached IAM role policies granting "
+                    "full administrative access were found."
+                ),
+            }
+        )
+
+    return findings
+
+
 def scan_iam(iam):
     findings = []
 
     findings.append(check_root_mfa(iam))
     findings.extend(check_access_key_age(iam))
     findings.extend(check_role_trust_policies(iam))
+    findings.extend(check_role_admin_policies(iam))
 
     return findings
 
