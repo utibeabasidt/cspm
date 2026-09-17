@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 import boto3
@@ -117,11 +118,112 @@ def check_access_key_age(iam):
     return findings
 
 
+def discover_roles(iam):
+    roles = []
+
+    paginator = iam.get_paginator("list_roles")
+
+    for page in paginator.paginate():
+        roles.extend(page.get("Roles", []))
+
+    return roles
+
+
+def get_role_trust_policy(iam, role_name):
+    response = iam.get_role(
+        RoleName=role_name
+    )
+
+    encoded_policy = response["Role"]["AssumeRolePolicyDocument"]
+
+    if isinstance(encoded_policy, str):
+        return json.loads(encoded_policy)
+
+    return encoded_policy
+
+
+def principal_contains_wildcard(principal):
+    if principal == "*":
+        return True
+
+    if isinstance(principal, dict):
+        for value in principal.values():
+            if value == "*":
+                return True
+
+            if isinstance(value, list) and "*" in value:
+                return True
+
+    if isinstance(principal, list):
+        return "*" in principal
+
+    return False
+
+
+def trust_policy_allows_wildcard(policy):
+    statements = policy.get("Statement", [])
+
+    if isinstance(statements, dict):
+        statements = [statements]
+
+    for statement in statements:
+        principal = statement.get("Principal")
+
+        if principal_contains_wildcard(principal):
+            return True
+
+    return False
+
+
+def check_role_trust_policies(iam):
+    roles = discover_roles(iam)
+    findings = []
+
+    for role in roles:
+        role_name = role["RoleName"]
+
+        policy = get_role_trust_policy(
+            iam,
+            role_name,
+        )
+
+        if trust_policy_allows_wildcard(policy):
+            findings.append(
+                {
+                    "rule_id": "IAM-003",
+                    "title": "Wildcard Role Trust Policy",
+                    "status": "FAIL",
+                    "severity": "HIGH",
+                    "message": (
+                        f"Role '{role_name}' has a trust policy "
+                        "containing a wildcard principal."
+                    ),
+                }
+            )
+
+    if not findings:
+        findings.append(
+            {
+                "rule_id": "IAM-003",
+                "title": "Wildcard Role Trust Policy",
+                "status": "PASS",
+                "severity": "INFO",
+                "message": (
+                    "No IAM roles with wildcard trust-policy "
+                    "principals were found."
+                ),
+            }
+        )
+
+    return findings
+
+
 def scan_iam(iam):
     findings = []
 
     findings.append(check_root_mfa(iam))
     findings.extend(check_access_key_age(iam))
+    findings.extend(check_role_trust_policies(iam))
 
     return findings
 
