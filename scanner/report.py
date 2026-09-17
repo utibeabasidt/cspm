@@ -10,28 +10,18 @@ REPORT_PATH = Path("reports/cspm_report.json")
 
 
 def load_report(path):
-    if not path.exists():
-        return None
-
-    with path.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
+    with path.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
-def collect_findings(reports):
-    findings = []
+def normalize_resource_type(resource_type):
+    if resource_type == "IAM Role":
+        return "IAM"
 
-    for report in reports:
-        if report is None:
-            continue
+    if resource_type == "IAM User":
+        return "IAM"
 
-        findings.extend(
-            report.get("findings", [])
-        )
-
-    return findings
+    return resource_type
 
 
 def build_summary(findings):
@@ -45,92 +35,52 @@ def build_summary(findings):
         for finding in findings
     )
 
-    resource_counts = Counter()
-
-    for finding in findings:
-        resource_type = finding["resource_type"]
-
-        if resource_type == "IAM Role":
-            resource_type = "IAM"
-
-        resource_counts[resource_type] += 1
+    resource_type_counts = Counter(
+        normalize_resource_type(finding["resource_type"])
+        for finding in findings
+    )
 
     return {
         "findings": len(findings),
-        "passed": status_counts.get(
-            "PASS",
-            0,
-        ),
-        "failed": status_counts.get(
-            "FAIL",
-            0,
-        ),
+        "passed": status_counts.get("PASS", 0),
+        "failed": status_counts.get("FAIL", 0),
         "severity": {
-            "HIGH": severity_counts.get(
-                "HIGH",
-                0,
-            ),
-            "MEDIUM": severity_counts.get(
-                "MEDIUM",
-                0,
-            ),
-            "LOW": severity_counts.get(
-                "LOW",
-                0,
-            ),
-            "INFO": severity_counts.get(
-                "INFO",
-                0,
-            ),
+            "HIGH": severity_counts.get("HIGH", 0),
+            "MEDIUM": severity_counts.get("MEDIUM", 0),
+            "LOW": severity_counts.get("LOW", 0),
+            "INFO": severity_counts.get("INFO", 0),
         },
-        "resource_types": {
-            "S3": resource_counts.get(
-                "S3",
-                0,
-            ),
-            "IAM": resource_counts.get(
-                "IAM",
-                0,
-            ),
-        },
+        "resource_types": dict(
+            sorted(resource_type_counts.items())
+        ),
     }
 
 
-def save_combined_report(
-    s3_report,
-    iam_report,
-):
-    reports = [
-        s3_report,
-        iam_report,
-    ]
+def build_combined_report(s3_report, iam_report):
+    findings = []
 
-    findings = collect_findings(
-        reports
-    )
+    findings.extend(s3_report.get("findings", []))
+    findings.extend(iam_report.get("findings", []))
 
-    report = {
+    return {
         "scan_time": datetime.now(
             timezone.utc
         ).isoformat(),
-        "resource_types": [
-            "S3",
-            "IAM",
-        ],
-        "summary": build_summary(
-            findings
-        ),
-        "sources": {
-            "s3": str(
-                S3_REPORT_PATH
-            ),
-            "iam": str(
-                IAM_REPORT_PATH
-            ),
+
+        "resource_type": "CSPM",
+
+        "summary": build_summary(findings),
+
+        "service_summaries": {
+            "S3": s3_report.get("summary", {}),
+            "IAM": iam_report.get("summary", {}),
         },
+
         "findings": findings,
     }
 
+
+def save_report(report):
     REPORT_PATH.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -149,61 +99,63 @@ def save_combined_report(
 
 def print_summary(report):
     summary = report["summary"]
+    severity = summary["severity"]
+    resource_types = summary["resource_types"]
 
     print("\nCSPM COMBINED SECURITY REPORT")
-    print("=============================")
+    print("============================")
 
-    print("\nSUMMARY")
-    print("-------")
-    print(
-        f"Total findings: "
-        f"{summary['findings']}"
-    )
-    print(
-        f"Passed:         "
-        f"{summary['passed']}"
-    )
-    print(
-        f"Failed:         "
-        f"{summary['failed']}"
-    )
+    print(f"Total findings: {summary['findings']}")
+    print(f"Passed:         {summary['passed']}")
+    print(f"Failed:         {summary['failed']}")
 
     print("\nSEVERITY SUMMARY")
     print("----------------")
-    print(
-        f"HIGH:   "
-        f"{summary['severity']['HIGH']}"
-    )
-    print(
-        f"MEDIUM: "
-        f"{summary['severity']['MEDIUM']}"
-    )
-    print(
-        f"LOW:    "
-        f"{summary['severity']['LOW']}"
-    )
-    print(
-        f"INFO:   "
-        f"{summary['severity']['INFO']}"
-    )
+    print(f"HIGH:   {severity['HIGH']}")
+    print(f"MEDIUM: {severity['MEDIUM']}")
+    print(f"LOW:    {severity['LOW']}")
+    print(f"INFO:   {severity['INFO']}")
 
-    print("\nRESOURCE SUMMARY")
+    print("\nRESOURCE TYPE SUMMARY")
+    print("---------------------")
+
+    for resource_type, count in resource_types.items():
+        print(f"{resource_type}: {count}")
+
+    print("\nSERVICE SUMMARY")
     print("----------------")
-    print(
-        f"S3 findings:  "
-        f"{summary['resource_types']['S3']}"
-    )
-    print(
-        f"IAM findings: "
-        f"{summary['resource_types']['IAM']}"
-    )
 
-    print(
-        f"\nReport: {REPORT_PATH}"
-    )
+    for service_name, service_summary in report[
+        "service_summaries"
+    ].items():
+        print(
+            f"{service_name}: "
+            f"{service_summary.get('findings', 0)} findings, "
+            f"{service_summary.get('failed', 0)} failed"
+        )
+
+    print(f"\nReport: {REPORT_PATH}")
 
 
 def main():
+    if not S3_REPORT_PATH.exists():
+        print(
+            f"Missing report: {S3_REPORT_PATH}"
+        )
+        print(
+            "Run the S3 scan first."
+        )
+        return
+
+    if not IAM_REPORT_PATH.exists():
+        print(
+            f"Missing report: {IAM_REPORT_PATH}"
+        )
+        print(
+            "Run the IAM scan first."
+        )
+        return
+
     s3_report = load_report(
         S3_REPORT_PATH
     )
@@ -212,39 +164,13 @@ def main():
         IAM_REPORT_PATH
     )
 
-    if s3_report is None:
-        print(
-            "S3 report not found:"
-            f" {S3_REPORT_PATH}"
-        )
-
-    if iam_report is None:
-        print(
-            "IAM report not found:"
-            f" {IAM_REPORT_PATH}"
-        )
-
-    if (
-        s3_report is None
-        and iam_report is None
-    ):
-        print(
-            "No CSPM scan reports are available."
-        )
-        return
-
-    save_combined_report(
+    combined_report = build_combined_report(
         s3_report,
         iam_report,
     )
 
-    combined_report = load_report(
-        REPORT_PATH
-    )
-
-    print_summary(
-        combined_report
-    )
+    save_report(combined_report)
+    print_summary(combined_report)
 
 
 if __name__ == "__main__":
